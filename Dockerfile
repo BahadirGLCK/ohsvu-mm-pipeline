@@ -27,16 +27,18 @@ ENV PATH="${VENV_PATH}/bin:${PATH}"
 # 3. Install System Dependencies & Python
 # Includes ffmpeg (for video), git-lfs (for large file handling),
 # and Python version specified along with venv and pip.
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
+RUN apt-get update && apt-get install -y --no-install-recommends \
     software-properties-common \
-    ffmpeg \
     git-lfs \
     python${PYTHON_VERSION} \
     python${PYTHON_VERSION}-venv \
-    python3-pip && \
-    # Clean up apt cache to reduce image size
-    rm -rf /var/lib/apt/lists/*
+    python3-pip \
+    libaio-dev \
+    ffmpeg \
+    libsm6 \
+    libxext6 \
+    libmpich-dev \
+    && rm -rf /var/lib/apt/lists/*
 
 # 4. Create Python Virtual Environment
 RUN python${PYTHON_VERSION} -m venv ${VENV_PATH}
@@ -67,4 +69,4 @@ COPY . ${APP_DIR}
 # For a development/research environment, a CMD like bash is often useful
 # to allow interactive sessions. Otherwise, you might set it to run your main.py.
 # CMD ["python", "main.py", "--help"]
-CMD ["bash"] 
+CMD ["bash"]
