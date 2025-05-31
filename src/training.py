@@ -1,0 +1,231 @@
+import random
+import pathlib
+import logging
+from tqdm import tqdm
+import pandas as pd
+# from datasets import Dataset # Dataset class is not directly used, examples are lists of dicts
+from unsloth import FastVisionModel
+from unsloth.trainer import (
+    UnslothVisionDataCollator,
+    UnslothTrainer,
+    UnslothTrainingArguments,
+)
+from transformers import AutoProcessor
+
+from .utils import row_to_example
+from .experiment_manager import ExperimentManager
+
+class Trainer:
+    """
+    Handles the model finetuning process, including data preparation, 
+    model initialization, training, and artifact saving.
+
+    Attributes:
+        config: The global configuration module.
+        exp_manager (ExperimentManager): Manager for the current experiment.
+        logger (logging.Logger): Logger instance, typically from ExperimentManager.
+        train_ds (list): Training dataset, list of examples.
+        eval_ds (list): Evaluation dataset for during training.
+        test_ds (list): Test dataset (split but not used directly by UnslothTrainer here).
+        model: The finetuned model instance.
+        tokenizer: The tokenizer associated with the model.
+        processor: The processor associated with the model.
+    """
+    def __init__(self, config, experiment_manager: ExperimentManager):
+        """
+        Initializes the Trainer.
+
+        Args:
+            config: The global configuration module.
+            experiment_manager: The ExperimentManager instance for the current run.
+        """
+        self.config = config
+        self.exp_manager = experiment_manager
+        self.logger = getattr(experiment_manager, 'logger', logging.getLogger(f"{__name__}.Trainer"))
+        if not self.exp_manager.logger:
+             self.logger.warning("ExperimentManager logger not found. Trainer using fallback logger.")
+        
+        random.seed(self.config.RANDOM_SEED)
+        self.logger.info(f"Trainer initialized for experiment: {self.exp_manager.current_experiment_path}. Random seed: {self.config.RANDOM_SEED}")
+        # Initialize attributes that will be set later
+        self.train_ds, self.eval_ds, self.test_ds = [], [], []
+        self.model, self.tokenizer, self.processor = None, None, None
+
+    def prepare_data_splits(self, ohs_prompt: str) -> tuple[list, list, list]:
+        """
+        Loads data from the CSV specified in config, prepares examples using
+        `row_to_example`, and splits them into training, evaluation, and test sets.
+
+        Args:
+            ohs_prompt (str): The OHS prompt string to be used in examples.
+
+        Returns:
+            tuple[list, list, list]: A tuple containing train, eval, and test datasets.
+        """
+        self.logger.info("Preparing data splits...")
+        #TODO: Make the csv file more generalizable. Like column names.
+        raw_df = pd.read_csv(self.config.CSV_PATH, header=None, names=["video_name", "gemini_answer"], encoding="utf-8")
+        self.logger.info(f"Loaded {len(raw_df)} rows from {self.config.CSV_PATH}")
+        
+        examples = [row_to_example(r, ohs_prompt) for _, r in tqdm(raw_df.iterrows(), total=len(raw_df), desc="Preparing examples")]
+        random.shuffle(examples)
+        self.logger.info(f"Created and shuffled {len(examples)} examples.")
+        
+        train_idx = int(len(examples) * self.config.TRAIN_SPLIT_RATIO)
+        eval_idx_end = int(len(examples) * (self.config.TRAIN_SPLIT_RATIO + self.config.EVAL_SPLIT_RATIO))
+        
+        self.train_ds = examples[:train_idx]
+        self.eval_ds  = examples[train_idx:eval_idx_end]
+        self.test_ds  = examples[eval_idx_end:]
+        self.logger.info(f"Data splits prepared: Train ({len(self.train_ds)}), Eval ({len(self.eval_ds)}), Test ({len(self.test_ds)})")
+        return self.train_ds, self.eval_ds, self.test_ds
+
+    def save_data_split_info(self) -> None:
+        """
+        Saves the video filenames for each data split (train, eval, test) 
+        into respective .txt files in the experiment's data_split directory.
+        Relies on `prepare_data_splits` having been called first.
+        """
+        self.logger.info("Saving data split information...")
+        if not self.train_ds and not self.eval_ds and not self.test_ds: # Check if any split has data
+            self.logger.error("Data splits are empty or not prepared. Call prepare_data_splits() first.")
+            raise ValueError("Data splits not prepared or are empty. Call prepare_data_splits() first.")
+            
+        data_split_dir = self.exp_manager.get_data_split_dir(self.config.DATA_SPLIT_DIR_NAME)
+        with open(data_split_dir / "train_video_names.txt", "w", encoding="utf-8") as f:
+            for example in self.train_ds:
+                f.write(pathlib.Path(example["video_path"]).name + "\n")
+        with open(data_split_dir / "eval_video_names.txt", "w", encoding="utf-8") as f:
+            for example in self.eval_ds:
+                f.write(pathlib.Path(example["video_path"]).name + "\n")
+        with open(data_split_dir / "test_video_names.txt", "w", encoding="utf-8") as f:
+            for example in self.test_ds:
+                f.write(pathlib.Path(example["video_path"]).name + "\n")
+        self.logger.info(f"Data split information saved in {data_split_dir}")
+
+    def initialize_and_prepare_model(self) -> tuple[any, any, any]:
+        """
+        Initializes the base model (FastVisionModel) from pretrained weights, 
+        applies PEFT (LoRA) configuration, and prepares it for training.
+        Sets `self.model`, `self.tokenizer`, `self.processor`.
+
+        Returns:
+            tuple: The initialized model, tokenizer, and processor.
+        """
+        self.logger.info("Initializing and preparing model...")
+        lora_config_dict = self.config.LORA_CONFIG.copy()
+        if 'random_state' not in lora_config_dict:
+            lora_config_dict["random_state"] = self.config.RANDOM_SEED
+            self.logger.info(f"Applied RANDOM_SEED ({self.config.RANDOM_SEED}) to LORA_CONFIG's random_state.")
+            
+        self.logger.info(f"Loading base model: {self.config.BASE_MODEL_ID} with max_seq_len: {self.config.MAX_SEQ_LEN_FINETUNE}")
+        model, tokenizer = FastVisionModel.from_pretrained(
+            self.config.BASE_MODEL_ID,
+            load_in_4bit=True,
+            use_gradient_checkpointing="unsloth",
+            max_seq_length=self.config.MAX_SEQ_LEN_FINETUNE,
+        )
+        
+        self.logger.info(f"Applying PEFT (LoRA) to the model with config: {lora_config_dict}")
+        self.model = FastVisionModel.get_peft_model(model, **lora_config_dict)
+        FastVisionModel.for_training(self.model)
+        self.processor = AutoProcessor.from_pretrained(self.config.BASE_MODEL_ID)
+        self.tokenizer = tokenizer # Tokenizer is returned by from_pretrained
+        self.logger.info("Model initialized, LoRA applied, and prepared for training.")
+        return self.model, self.tokenizer, self.processor
+
+    def train_model(self) -> any:
+        """
+        Configures and runs the UnslothTrainer to finetune the model.
+        Relies on `initialize_and_prepare_model` and `prepare_data_splits` 
+        having been called.
+
+        Returns:
+            The trained model instance (modified in-place).
+        """
+        self.logger.info("Configuring UnslothTrainer and starting model training...")
+        if not all([self.model, self.tokenizer, self.processor, self.train_ds, self.eval_ds]):
+            self.logger.error("Model, tokenizer, processor, or data splits not ready before training.")
+            raise ValueError("Model/data not properly initialized before calling train_model.")
+
+        dc = UnslothVisionDataCollator(self.model, processor=self.processor)
+        
+        current_training_args = self.config.TRAINING_ARGS_CONFIG.copy()
+        finetuned_model_output_dir = self.exp_manager.get_finetuned_model_dir(self.config.FINETUNED_MODEL_DIR_NAME)
+        current_training_args["output_dir"] = str(finetuned_model_output_dir)
+        self.logger.info(f"Training arguments configured. Output directory: {finetuned_model_output_dir}")
+        self.logger.debug(f"Training args: {current_training_args}")
+        
+        trainer = UnslothTrainer(
+            model=self.model,
+            tokenizer=self.tokenizer,
+            train_dataset=self.train_ds, 
+            eval_dataset=self.eval_ds,   
+            data_collator=dc,
+            max_seq_length=self.config.MAX_SEQ_LEN_FINETUNE,
+            args=UnslothTrainingArguments(**current_training_args),
+        )
+        self.logger.info(f"UnslothTrainer initialized. Starting training...")
+        #TODO: Make this step can start from a checkpoint.
+        trainer.train()
+        self.logger.info("Training finished.")
+        return self.model 
+
+    def save_model_artifacts(self) -> None:
+        """
+        Saves the finetuned LoRA adapter, tokenizer, and the merged 16-bit model
+        to the experiment's finetuned model directory.
+        Relies on `train_model` having been successfully executed.
+        """
+        self.logger.info("Saving model artifacts...")
+        if not self.model or not self.tokenizer:
+            self.logger.error("Model or tokenizer not available for saving. Was training successful?")
+            raise ValueError("Model or tokenizer not available.")
+
+        FastVisionModel.for_inference(self.model)
+        self.logger.info("Model converted to inference mode.")
+        
+        finetuned_model_dir = self.exp_manager.get_finetuned_model_dir(self.config.FINETUNED_MODEL_DIR_NAME)
+        final_model_path = finetuned_model_dir / self.config.LORA_CHECKPOINT_NAME 
+        tokenizer_path = finetuned_model_dir / "tokenizer"
+        merged_model_path = finetuned_model_dir / "merged_16bit"
+
+        self.logger.info(f"Saving final LoRA checkpoint to: {final_model_path}")
+        self.model.save_pretrained(str(final_model_path))
+        
+        self.logger.info(f"Saving tokenizer to: {tokenizer_path}")
+        self.tokenizer.save_pretrained(str(tokenizer_path))
+        
+        self.logger.info(f"Saving merged 16-bit model to: {merged_model_path}")
+        self.model.save_pretrained_merged(str(merged_model_path), self.tokenizer)
+        self.logger.info("Model artifacts saving complete.")
+
+    def run_training_pipeline(self) -> pathlib.Path:
+        """
+        Executes the full training pipeline: data preparation, model initialization,
+        training, and artifact saving.
+
+        Returns:
+            pathlib.Path: Path to the current experiment directory.
+        
+        Raises:
+            Exception: Propagates any exception that occurs during the pipeline after logging it.
+        """
+        self.logger.info(f"Starting full training pipeline for experiment: {self.exp_manager.current_experiment_path}")
+        
+        try:
+            with open(self.config.OHS_PROMPT_PATH, "r", encoding="utf-8") as f:
+                ohs_prompt = f.read().strip()
+            self.logger.info(f"Loaded OHS prompt from {self.config.OHS_PROMPT_PATH}")
+
+            self.prepare_data_splits(ohs_prompt)
+            self.save_data_split_info()
+            self.initialize_and_prepare_model()
+            self.train_model() # Model is updated in-place
+            self.save_model_artifacts()
+            
+            self.logger.info(f"Training pipeline completed successfully. All artifacts saved in: {self.exp_manager.current_experiment_path}")
+            return self.exp_manager.current_experiment_path
+        except Exception as e:
+            self.logger.exception(f"Critical error during training pipeline for experiment {self.exp_manager.current_experiment_path}. Details: {e}")
+            raise 
