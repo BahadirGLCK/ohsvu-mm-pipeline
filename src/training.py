@@ -49,34 +49,54 @@ class Trainer:
         self.logger.info(f"Trainer initialized for experiment: {self.exp_manager.current_experiment_path}. Random seed: {self.config.RANDOM_SEED}")
         # Initialize attributes that will be set later
         self.train_ds, self.eval_ds, self.test_ds = [], [], []
+        self.train_ds_meta, self.eval_ds_meta, self.test_ds_meta = [], [], [] # For storing metadata like video_name
         self.model, self.tokenizer, self.processor = None, None, None
 
     def prepare_data_splits(self, ohs_prompt: str) -> tuple[list, list, list]:
         """
         Loads data from the CSV specified in config, prepares examples using
         `row_to_example`, and splits them into training, evaluation, and test sets.
+        The main datasets (train_ds, eval_ds, test_ds) will contain only the
+        model inputs (e.g., {"messages": ...}), while metadata like video names
+        will be stored in corresponding _meta lists.
 
         Args:
             ohs_prompt (str): The OHS prompt string to be used in examples.
 
         Returns:
-            tuple[list, list, list]: A tuple containing train, eval, and test datasets.
+            tuple[list, list, list]: A tuple containing train, eval, and test datasets (model inputs only).
         """
         self.logger.info("Preparing data splits...")
-        #TODO: Make the csv file more generalizable. Like column names.
         raw_df = pd.read_csv(self.config.CSV_PATH, header=None, names=["video_name", "gemini_answer"], encoding="utf-8")
         self.logger.info(f"Loaded {len(raw_df)} rows from {self.config.CSV_PATH}")
         
-        examples = [row_to_example(r, ohs_prompt) for _, r in tqdm(raw_df.iterrows(), total=len(raw_df), desc="Preparing examples")]
-        random.shuffle(examples)
-        self.logger.info(f"Created and shuffled {len(examples)} examples.")
+        # Temporarily store examples with their metadata before splitting
+        full_examples_with_meta = []
+        for _, row in tqdm(raw_df.iterrows(), total=len(raw_df), desc="Preparing examples"):
+            model_input_data = row_to_example(row, ohs_prompt) # This now returns {"messages": ...}
+            # Construct video_path here for consistent use, or just store video_name if preferred for meta
+            video_path = self.config.VIDEO_DIR / row["video_name"]
+            full_examples_with_meta.append({
+                "data": model_input_data, 
+                "video_path": str(video_path) # Store full path or just row["video_name"]
+            })
+            
+        random.shuffle(full_examples_with_meta)
+        self.logger.info(f"Created and shuffled {len(full_examples_with_meta)} examples with metadata.")
         
-        train_idx = int(len(examples) * self.config.TRAIN_SPLIT_RATIO)
-        eval_idx_end = int(len(examples) * (self.config.TRAIN_SPLIT_RATIO + self.config.EVAL_SPLIT_RATIO))
+        train_idx = int(len(full_examples_with_meta) * self.config.TRAIN_SPLIT_RATIO)
+        eval_idx_end = int(len(full_examples_with_meta) * (self.config.TRAIN_SPLIT_RATIO + self.config.EVAL_SPLIT_RATIO))
         
-        self.train_ds = examples[:train_idx]
-        self.eval_ds  = examples[train_idx:eval_idx_end]
-        self.test_ds  = examples[eval_idx_end:]
+        # Populate main datasets with only model input data
+        self.train_ds = [ex["data"] for ex in full_examples_with_meta[:train_idx]]
+        self.eval_ds  = [ex["data"] for ex in full_examples_with_meta[train_idx:eval_idx_end]]
+        self.test_ds  = [ex["data"] for ex in full_examples_with_meta[eval_idx_end:]]
+
+        # Populate meta datasets
+        self.train_ds_meta = full_examples_with_meta[:train_idx]
+        self.eval_ds_meta  = full_examples_with_meta[train_idx:eval_idx_end]
+        self.test_ds_meta  = full_examples_with_meta[eval_idx_end:]
+        
         self.logger.info(f"Data splits prepared: Train ({len(self.train_ds)}), Eval ({len(self.eval_ds)}), Test ({len(self.test_ds)})")
         return self.train_ds, self.eval_ds, self.test_ds
 
@@ -84,23 +104,23 @@ class Trainer:
         """
         Saves the video filenames for each data split (train, eval, test) 
         into respective .txt files in the experiment's data_split directory.
-        Relies on `prepare_data_splits` having been called first.
+        Relies on `prepare_data_splits` having been called first and _meta lists populated.
         """
         self.logger.info("Saving data split information...")
-        if not self.train_ds and not self.eval_ds and not self.test_ds: # Check if any split has data
-            self.logger.error("Data splits are empty or not prepared. Call prepare_data_splits() first.")
-            raise ValueError("Data splits not prepared or are empty. Call prepare_data_splits() first.")
+        if not self.train_ds_meta and not self.eval_ds_meta and not self.test_ds_meta: # Check if any meta split has data
+            self.logger.error("Metadata for data splits is empty or not prepared. Call prepare_data_splits() first.")
+            raise ValueError("Metadata for data splits not prepared or are empty. Call prepare_data_splits() first.")
             
         data_split_dir = self.exp_manager.get_data_split_dir(self.config.DATA_SPLIT_DIR_NAME)
         with open(data_split_dir / "train_video_names.txt", "w", encoding="utf-8") as f:
-            for example in self.train_ds:
-                f.write(pathlib.Path(example["video_path"]).name + "\n")
+            for example_meta in self.train_ds_meta:
+                f.write(pathlib.Path(example_meta["video_path"]).name + "\n") # Use video_path from meta
         with open(data_split_dir / "eval_video_names.txt", "w", encoding="utf-8") as f:
-            for example in self.eval_ds:
-                f.write(pathlib.Path(example["video_path"]).name + "\n")
+            for example_meta in self.eval_ds_meta:
+                f.write(pathlib.Path(example_meta["video_path"]).name + "\n")
         with open(data_split_dir / "test_video_names.txt", "w", encoding="utf-8") as f:
-            for example in self.test_ds:
-                f.write(pathlib.Path(example["video_path"]).name + "\n")
+            for example_meta in self.test_ds_meta:
+                f.write(pathlib.Path(example_meta["video_path"]).name + "\n")
         self.logger.info(f"Data split information saved in {data_split_dir}")
 
     def initialize_and_prepare_model(self) -> tuple[any, any, any]:

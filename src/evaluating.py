@@ -40,6 +40,8 @@ class Evaluator:
         processor: The processor associated with the model.
         tokenizer: The tokenizer associated with the model.
         test_examples (list): List of prepared examples for the test set.
+        test_ordered_video_names (list): List to maintain order of test set.
+        test_ground_truth_map (dict): Dictionary to store ground truth answers keyed by video_name.
     """
     def __init__(self, global_config_module, experiment_manager: ExperimentManager):
         """
@@ -66,6 +68,8 @@ class Evaluator:
         # Initialize attributes
         self.model, self.processor, self.tokenizer = None, None, None
         self.test_examples = []
+        self.test_ordered_video_names = [] # To maintain order of test set
+        self.test_ground_truth_map = {} # To store GT answers keyed by video_name
         self.logger.info(f"Evaluator initialized for experiment: {self.exp_manager.current_experiment_path}")
 
     def _load_video_names(self, txt_path: pathlib.Path) -> list[str]:
@@ -103,29 +107,70 @@ class Evaluator:
         self.logger.debug(f"Extracted {len(imgs)} images.")
         return imgs
 
-    def _generate_reply_for_sample(self, sample: dict, ohs_prompt: str) -> dict:
+    def _extract_text_prompt(self, sample: dict) -> str | None:
+        """Extracts the text prompt from a sample dictionary."""
+        self.logger.debug(f"Extracting text prompt for sample related to video: {sample.get('video_path', 'Unknown')}")
+        user_content = sample.get("messages", [{}])[0].get("content", [])
+        for blk in user_content:
+            if blk.get("type") == "text":
+                return blk.get("text")
+        self.logger.warning(f"No text prompt found in sample {sample.get('video_path', 'Unknown')}")
+        return None
+
+    def _generate_reply_for_sample(self, sample: dict) -> dict:
         """
         Generates a model reply (parsed JSON) for a single evaluation sample.
         
         Args:
-            sample (dict): The input sample dictionary, expected to contain image data and video path.
-            ohs_prompt (str): The OHS prompt string.
+            sample (dict): The input sample dictionary, expected to be in the format 
+                           returned by row_to_example (i.e., {"messages": [...]}).
 
         Returns:
             dict: Parsed JSON from the model's reply, or an empty dict on failure.
         """
-        video_p = sample.get('video_path', 'Unknown')
-        self.logger.debug(f"Generating reply for sample: {video_p}")
-        images = self._extract_images(sample)
+        video_p_from_messages = "Unknown" # Placeholder if video_path not in messages (it shouldn't be)
+                                        # Actual video_path for logging should be retrieved before calling this if needed.
+        
+        # sample is now directly the output of row_to_example, which is {"messages": [...]}
+        # The prompt and images are within sample["messages"][0]["content"]
+        
+        # For logging purposes, it's better if video_path was part of the sample when iterating
+        # However, the current `self.test_examples` only contains `{"messages": ...}`.
+        # Let's assume for now `video_p_from_messages` is sufficient if we can't easily get original video_path here.
+
+        self.logger.debug(f"Generating reply for sample (structure: {sample.keys()})") # Log keys of sample
+        
+        images = self._extract_images(sample) # sample is {"messages": ...}
         if not images: 
-            self.logger.warning(f"No images found or loadable for sample {video_p}, cannot generate reply.")
+            self.logger.warning(f"No images found or loadable for sample, cannot generate reply.")
+            return {}
+
+        ohs_prompt_from_sample = self._extract_text_prompt(sample) # sample is {"messages": ...}
+        if not ohs_prompt_from_sample:
+            self.logger.warning(f"No OHS prompt extracted from sample, cannot generate reply.")
             return {}
         
-        messages_for_model = [{"role": "user", "content": ([{"type": "image", "image": img} for img in images] + 
-                                                       [{"type": "text",  "text": ohs_prompt}])}]
+        # messages_for_model should be directly sample["messages"] if it's for the user role
+        # and doesn't contain an assistant response.
+        # The processor.apply_chat_template usually handles the full conversation.
+        # Let's ensure the 'sample' is structured as the input for apply_chat_template.
+        # row_to_example creates: {"messages": [{"role": "user", ...}, {"role": "assistant", ...}]}
+        # For inference, we only need the user part.
+        
+        user_messages_for_inference = [msg for msg in sample["messages"] if msg.get("role") == "user"]
+        if not user_messages_for_inference:
+            self.logger.warning("No user messages found in sample for inference.")
+            return {}
+
         try:
-            text = self.processor.apply_chat_template(messages_for_model, tokenize=False, add_generation_prompt=True)
-            image_inputs, video_inputs = process_vision_info(messages_for_model) # Assumes this handles PIL images
+            # The processor.apply_chat_template expects the full conversation usually,
+            # but for generation, providing only the user turn(s) and add_generation_prompt=True is common.
+            text = self.processor.apply_chat_template(user_messages_for_inference, tokenize=False, add_generation_prompt=True)
+            
+            # process_vision_info might also expect the "messages" structure
+            # It needs to extract images from user_messages_for_inference
+            image_inputs, video_inputs = process_vision_info(user_messages_for_inference) 
+            
             batch = self.processor(text=[text], images=image_inputs, videos=video_inputs, padding=True, return_tensors="pt").to(self.device_cfg)
             
             with torch.inference_mode():
@@ -133,22 +178,21 @@ class Evaluator:
             
             gen_trim = gen_ids[:, batch.input_ids.shape[1]:]
             reply = self.processor.batch_decode(gen_trim, skip_special_tokens=True, clean_up_tokenization_spaces=False)[0]
-            self.logger.debug(f"Generated reply for {video_p} (first 100 chars): {reply[:100]}...")
+            self.logger.debug(f"Generated reply for {video_p_from_messages} (first 100 chars): {reply[:100]}...")
             
             match = re.search(r"\{[\s\S]*\}", reply)
             if match:
                 parsed_json = json.loads(match.group())
                 return parsed_json
             else:
-                self.logger.warning(f"No JSON-like structure found in reply for {video_p}. Reply: {reply}")
+                self.logger.warning(f"No JSON-like structure found in reply for {video_p_from_messages}. Reply: {reply}")
                 return {}
         except json.JSONDecodeError as e:
-            self.logger.error(f"JSONDecodeError parsing reply for {video_p}. Reply: {reply}. Error: {e}")
+            self.logger.error(f"JSONDecodeError parsing reply for {video_p_from_messages}. Reply: {reply}. Error: {e}")
             return {}
         except Exception as e:
-            self.logger.exception(f"Unexpected error during reply generation for {video_p}: {e}")
+            self.logger.exception(f"Unexpected error during reply generation for {video_p_from_messages}: {e}")
             return {}
-
 
     def load_model_for_evaluation(self) -> None:
         """
@@ -187,8 +231,10 @@ class Evaluator:
         """
         Prepares the test dataset for evaluation.
         Loads test video names from the experiment's data split directory,
-        filters the main CSV for these videos, and creates example dicts.
-        Sets `self.test_examples`. Exits if critical files are missing.
+        filters the main CSV for these videos, creates example dicts, and stores
+        ground truth information for later use.
+        Sets `self.test_examples`, `self.test_ordered_video_names`, `self.test_ground_truth_map`.
+        Exits if critical files are missing.
         
         Args:
             ohs_prompt_text (str): The OHS prompt string.
@@ -197,7 +243,6 @@ class Evaluator:
         data_split_dir_name = self.exp_manager.get_config_value("DATA_SPLIT_DIR_NAME", main_config_module=self.global_config)
         video_names_path = self.exp_manager.get_data_split_dir(data_split_dir_name) / "test_video_names.txt"
         
-        # CSV_PATH should come from global_config as it's a primary data source path
         csv_gt_path = pathlib.Path(self.global_config.CSV_PATH)
 
         if not video_names_path.exists():
@@ -206,6 +251,8 @@ class Evaluator:
         if not video_names_to_test:
              self.logger.warning(f"No video names loaded from {video_names_path}. Test set will be empty.")
              self.test_examples = []
+             self.test_ordered_video_names = []
+             self.test_ground_truth_map = {}
              return
         self.logger.info(f"Loaded {len(video_names_to_test)} video names for testing from {video_names_path}")
         
@@ -214,28 +261,42 @@ class Evaluator:
         
         try:
             raw_df = pd.read_csv(csv_gt_path, header=None, names=["video_name", "gemini_answer"], encoding="utf-8")
-            test_df = raw_df[raw_df["video_name"].isin(video_names_to_test)]
+            # Filter for the videos that are in the current test set
+            test_df = raw_df[raw_df["video_name"].isin(video_names_to_test)].copy() # Use .copy() to avoid SettingWithCopyWarning
+            
+            # Ensure the order of test_df matches video_names_to_test if strict order is paramount
+            # For now, pd.DataFrame.isin followed by iteration should be deterministic if video_names_to_test order matters.
+            # A more robust way for strict ordering based on video_names_to_test:
+            test_df['video_name'] = pd.Categorical(test_df['video_name'], categories=video_names_to_test, ordered=True)
+            test_df = test_df.sort_values('video_name').reset_index(drop=True)
+            # Filter out any videos that might have been in video_names_to_test but not in raw_df
+            test_df = test_df[test_df['video_name'].isin(raw_df['video_name'])]
+
         except Exception as e:
             self.logger.critical(f"Failed to load or process ground truth CSV from {csv_gt_path}: {e}"); sys.exit(1)
-
 
         if test_df.empty:
             self.logger.warning(f"No matching videos found in CSV ({csv_gt_path}) for the test set defined in {video_names_path}. Evaluation will have no samples.")
             self.test_examples = []
+            self.test_ordered_video_names = []
+            self.test_ground_truth_map = {}
             return
         
-        self.test_examples = [row_to_example(r, ohs_prompt_text, global_config=self.global_config) 
+        self.test_examples = [row_to_example(r, ohs_prompt_text)
                               for _, r in tqdm(test_df.iterrows(), total=len(test_df), desc="Preparing test examples")]
+        
+        self.test_ordered_video_names = test_df["video_name"].tolist()
+        self.test_ground_truth_map = {row["video_name"]: row["gemini_answer"] for _, row in test_df.iterrows()}
+        
         self.logger.info(f"Prepared {len(self.test_examples)} test examples for evaluation.")
+        self.logger.info(f"Stored {len(self.test_ordered_video_names)} ordered video names and {len(self.test_ground_truth_map)} ground truth entries.")
 
-    def collect_predictions_and_ground_truths(self, ohs_prompt_text: str) -> tuple[list, list, list, list, list]:
+    def collect_predictions_and_ground_truths(self) -> tuple[list, list, list, list, list]:
         """
         Iterates through `self.test_examples`, generates model predictions,
-        and extracts ground truth information.
+        and extracts ground truth information using pre-populated attributes 
+        `self.test_ordered_video_names` and `self.test_ground_truth_map`.
         
-        Args:
-            ohs_prompt_text (str): The OHS prompt string.
-
         Returns:
             tuple: Contains lists of true_counts, pred_counts, true_risks, pred_risks, 
                    and all_predictions_for_file (raw dicts for saving).
@@ -247,38 +308,60 @@ class Evaluator:
         if not self.test_examples:
             self.logger.warning("No test examples available to evaluate. Returning empty results.")
             return [], [], [], [], []
+        if len(self.test_examples) != len(self.test_ordered_video_names):
+            self.logger.error(f"Mismatch between test_examples ({len(self.test_examples)}) and ordered video names ({len(self.test_ordered_video_names)}). Data integrity issue.")
+            # Depending on severity, could raise an error or return empty
+            return [], [], [], [], [] # Return empty to prevent further processing with mismatched data
 
-        pred_counts, true_counts = [], []
-        pred_risks, true_risks = [], []
+        true_counts, pred_counts = [], []
+        true_risks, pred_risks = [], []
         all_predictions_for_file = []
 
-        for samp in tqdm(self.test_examples, desc="Evaluating samples"):
-            video_path_str = samp.get('video_path', 'Unknown Video')
-            gt_text = samp.get("messages", [{}, {}])[1].get("content", [{}])[0].get("text", "{}")
+        for idx, sample in enumerate(tqdm(self.test_examples, desc="Generating predictions")):
+            video_name_for_log = self.test_ordered_video_names[idx]
+            self.logger.debug(f"Processing for evaluation: {video_name_for_log}")
+
+            pred_json = self._generate_reply_for_sample(sample)
+
+            gt_json_str = self.test_ground_truth_map.get(video_name_for_log)
+            parsed_gt_json = {}
+            if gt_json_str:
+                try:
+                    if isinstance(gt_json_str, str):
+                        parsed_gt_json = json.loads(gt_json_str)
+                    elif isinstance(gt_json_str, dict): # Should not happen if from CSV
+                        parsed_gt_json = gt_json_str
+                except json.JSONDecodeError:
+                    self.logger.warning(f"Could not parse ground truth JSON for {video_name_for_log}. GT text: {gt_json_str}")
+            else:
+                self.logger.warning(f"No ground truth data found in map for video: {video_name_for_log}")
             
-            gt_json = {}
-            try:
-                match_gt = re.search(r"\{[\s\S]*\}", gt_text)
-                if match_gt: gt_json = json.loads(match_gt.group())
-            except json.JSONDecodeError: 
-                self.logger.warning(f"Could not parse ground truth JSON for {video_path_str}. GT text: {gt_text}")
+            current_prediction_record = {
+                "video_name": video_name_for_log, 
+                "prediction": pred_json if pred_json else {},
+                "ground_truth": parsed_gt_json
+            }
+            all_predictions_for_file.append(current_prediction_record)
+
+            if not pred_json: 
+                self.logger.warning(f"Skipping metrics for {video_name_for_log} due to empty/failed prediction.")
+                true_counts.append(tuple(0 for _ in self.metric_obj_keys))
+                pred_counts.append(tuple(0 for _ in self.metric_obj_keys))
+                true_risks.append([]) 
+                pred_risks.append([])
+                continue
+
+            true_obj_counts_dict = parsed_gt_json.get("object_counts", {})
+            pred_obj_counts_dict = pred_json.get("object_counts", {})
+            true_counts.append(tuple(true_obj_counts_dict.get(k, 0) for k in self.metric_obj_keys))
+            pred_counts.append(tuple(pred_obj_counts_dict.get(k, 0) for k in self.metric_obj_keys))
             
-            pred_json = self._generate_reply_for_sample(samp, ohs_prompt_text) # Already handles its own errors
-            
-            all_predictions_for_file.append({"video_path": video_path_str, "ground_truth": gt_json, "prediction": pred_json})
-            
-            true_obj_counts = gt_json.get("object_counts", {})
-            pred_obj_counts = pred_json.get("object_counts", {})
-            true_counts.append(tuple(true_obj_counts.get(k, 0) for k in self.metric_obj_keys))
-            pred_counts.append(tuple(pred_obj_counts.get(k, 0) for k in self.metric_obj_keys))
-            
-            true_detected_risks = gt_json.get("detected_risks", [])
-            pred_detected_risks = pred_json.get("detected_risks", [])
-            # Ensure risk numbers are extracted correctly and handle potential None values
-            true_risks.append({r.get("risk_number") for r in true_detected_risks if r and isinstance(r, dict) and "risk_number" in r})
-            pred_risks.append({r.get("risk_number", -1) for r in pred_detected_risks if r and isinstance(r, dict) and "risk_number" in r})
+            true_detected_risks_list = parsed_gt_json.get("detected_risks", [])
+            pred_detected_risks_list = pred_json.get("detected_risks", [])
+            true_risks.append(sorted([str(r).lower() for r in true_detected_risks_list]))
+            pred_risks.append(sorted([str(r).lower() for r in pred_detected_risks_list]))
         
-        self.logger.info("Inference and ground truth collection complete.")
+        self.logger.info(f"Collected {len(all_predictions_for_file)} predictions/ground truths.")
         return true_counts, pred_counts, true_risks, pred_risks, all_predictions_for_file
 
     def calculate_and_save_metrics(self, true_counts, pred_counts, true_risks, pred_risks, all_predictions_for_file) -> None:
@@ -376,38 +459,29 @@ class Evaluator:
 
     def run_evaluation_pipeline(self) -> None:
         """
-        Executes the full evaluation pipeline: model loading, data preparation,
-        prediction collection, and metrics calculation/saving.
-        
-        Raises:
-            Exception: Propagates any exception that occurs after logging it.
+        Orchestrates the full evaluation pipeline: loads config, model, data,
+        collects predictions, calculates metrics, and saves results.
         """
-        self.logger.info(f"Starting full evaluation pipeline for experiment: {self.exp_manager.current_experiment_path}")
+        self.logger.info("Starting evaluation pipeline...")
+        
+        ohs_prompt_path = pathlib.Path(self.exp_manager.get_config_value("OHS_PROMPT_PATH", main_config_module=self.global_config))
         try:
-            self.load_model_for_evaluation() # Exits on critical model load failure
-            
-            ohs_prompt_path_str = self.exp_manager.get_config_value("OHS_PROMPT_PATH", main_config_module=self.global_config)
-            if not ohs_prompt_path_str:
-                self.logger.critical("OHS_PROMPT_PATH not found in config. Cannot proceed."); sys.exit(1)
-            
-            ohs_prompt_path = pathlib.Path(ohs_prompt_path_str)
-            if not ohs_prompt_path.exists():
-                 self.logger.critical(f"OHS prompt file not found at {ohs_prompt_path}. Cannot proceed."); sys.exit(1)
-            
-            ohs_prompt_text = ohs_prompt_path.read_text(encoding="utf-8").strip()
-            self.logger.info(f"Loaded OHS prompt from {ohs_prompt_path}")
-            
-            self.prepare_evaluation_data(ohs_prompt_text) # Exits on critical data prep failure
-            if not self.test_examples:
-                self.logger.warning("No test examples were prepared. Evaluation pipeline cannot continue.")
-                return
-
-            true_counts, pred_counts, true_risks, pred_risks, all_preds_file = self.collect_predictions_and_ground_truths(ohs_prompt_text)
-            
-            self.calculate_and_save_metrics(true_counts, pred_counts, true_risks, pred_risks, all_preds_file)
-            self.logger.info("Evaluation pipeline finished successfully.")
-        except SystemExit: # Allow sys.exit to propagate to stop execution
-            raise   
+            with open(ohs_prompt_path, "r", encoding="utf-8") as f:
+                ohs_prompt_text = f.read().strip()
+            self.logger.info(f"Loaded OHS prompt for evaluation from: {ohs_prompt_path}")
         except Exception as e:
-            self.logger.exception(f"Critical error during evaluation pipeline for experiment {self.exp_manager.current_experiment_path}. Details: {e}")
-            raise 
+            self.logger.critical(f"Failed to load OHS prompt from {ohs_prompt_path}: {e}"); sys.exit(1)
+
+        self.load_model_for_evaluation()
+        self.prepare_evaluation_data(ohs_prompt_text) 
+
+        if not self.test_examples:
+            self.logger.warning("No test examples were prepared. Evaluation pipeline cannot continue meaningfully.")
+            # Optionally save an empty metrics file or just return
+            self.calculate_and_save_metrics([], [], [], [], []) # Save empty/default metrics
+            return
+
+        true_counts, pred_counts, true_risks, pred_risks, all_preds_for_file = self.collect_predictions_and_ground_truths() # Removed ohs_prompt_text
+        
+        self.calculate_and_save_metrics(true_counts, pred_counts, true_risks, pred_risks, all_preds_for_file)
+        self.logger.info("Evaluation pipeline finished successfully.") 

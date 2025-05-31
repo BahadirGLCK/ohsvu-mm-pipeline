@@ -71,6 +71,6 @@ def row_to_example(row, ohs_prompt):
         {"role": "user", "content": content},
         {"role": "assistant", "content": [{"type": "text", "text": row["gemini_answer"]}]},
     ]
-    return {"messages": messages, "video_path": str(video_path)} # Store video_path as string for easier serialization if needed 
+    return {"messages": messages} # Only return messages as requested
 
 # Removed save_config_snapshot as it's now in ExperimentManager 
