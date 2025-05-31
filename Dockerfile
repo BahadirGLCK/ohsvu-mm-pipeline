@@ -16,7 +16,6 @@ ENV VENV_PATH=/opt/venv
 # Application directory and PYTHONPATH
 # Adding /app to PYTHONPATH ensures modules in the project root (like qwen_vl_utils if it's a top-level dir) are found.
 ENV APP_DIR=/app
-ENV PYTHONPATH=""
 ENV PYTHONPATH="${APP_DIR}:${PYTHONPATH}"
 
 # Triton cache directory (as mentioned in README)
