@@ -15,7 +15,7 @@ ENV VENV_PATH=/opt/venv
 
 # Application directory and PYTHONPATH
 # Adding /app to PYTHONPATH ensures modules in the project root (like qwen_vl_utils if it's a top-level dir) are found.
-ENV APP_DIR=/app
+ENV APP_DIR=/workspace
 ENV PYTHONPATH=""
 ENV PYTHONPATH="${APP_DIR}:${PYTHONPATH}"
 
@@ -56,12 +56,12 @@ RUN pip install --upgrade pip && \
 # 6. Set Up Application Directory and Triton Cache
 WORKDIR ${APP_DIR}
 # Create Triton cache directory and make it writable by any user
-# This runs after WORKDIR is set to /app, so ${TRITON_CACHE_DIR} resolves correctly.
+# This runs after WORKDIR is set to /workspace, so ${TRITON_CACHE_DIR} resolves correctly.
 RUN mkdir -p ${TRITON_CACHE_DIR} && \
     chmod -R 777 ${TRITON_CACHE_DIR}
 
 # 7. Copy Project Code
-# This copies all files from your project's build context into the image at /app.
+# This copies all files from your project's build context into the image at /workspace.
 COPY . ${APP_DIR}
 
 # 8. (Optional) Expose Ports or Set Default Command
