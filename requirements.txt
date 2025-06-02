@@ -1,26 +1,10 @@
-torch==2.6.0
-torchvision
-transformers
-accelerate
-peft
-numpy
-tensorboard==1.14.0
-bitsandbytes
-trl[quantization]
-datasets
-deepspeed
-opencv-python
-huggingface_hub
 mpi4py
-# For xformers, you might need to install with a specific index URL:
-# pip install --no-cache-dir "xformers==0.0.29.post3" --extra-index-url https://download.pytorch.org/whl/cu124
-xformers==0.0.29.post3
-unsloth[vision]
+unsloth
+tensorboard==1.14.0
+opencv-python
 pillow
-opencv-python-headless
-decord
-wandb 
-qwen-vl-utils==0.0.8
+qwen-vl-utils[decord]==0.0.8
 PyYAML
 hydra-core 
 scikit-learn 
+evaluate 
