@@ -3,7 +3,7 @@
 # This aligns with the mention of CUDA 12.1 in your README.
 # If your PyTorch version is strictly for CUDA 11.8, you might need to change this to a CUDA 11.8 base.
 # Refer to https://hub.docker.com/r/nvidia/cuda/ for available tags.
-FROM nvidia/cuda:12.1.1-cudnn8-devel-ubuntu22.04
+FROM nvidia/cuda:12.6.2-cudnn-devel-ubuntu22.04
 
 # 2. Set Environment Variables
 # Non-interactive frontend for apt-get
@@ -19,18 +19,18 @@ ENV APP_DIR=/workspace
 ENV PYTHONPATH=""
 ENV PYTHONPATH="${APP_DIR}:${PYTHONPATH}"
 
-# Triton cache directory (as mentioned in README)
-ENV TRITON_CACHE_DIR=${APP_DIR}/.triton_cache
+# Triton cache directory (as per your working setup)
+ENV TRITON_CACHE_DIR=/root/.triton/autotune
 
 # Add virtual environment's bin to PATH
 ENV PATH="${VENV_PATH}/bin:${PATH}"
 
 # 3. Install System Dependencies & Python
-# Includes ffmpeg (for video), git-lfs (for large file handling),
-# and Python version specified along with venv and pip.
+# Includes build-essential and other dependencies from your working setup.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     software-properties-common \
     git-lfs \
+    build-essential \
     python${PYTHON_VERSION} \
     python${PYTHON_VERSION}-venv \
     python3-pip \
@@ -55,10 +55,9 @@ RUN pip install --upgrade pip && \
 
 # 6. Set Up Application Directory and Triton Cache
 WORKDIR ${APP_DIR}
-# Create Triton cache directory and make it writable by any user
-# This runs after WORKDIR is set to /workspace, so ${TRITON_CACHE_DIR} resolves correctly.
+# Create Triton cache directory as per your working setup
 RUN mkdir -p ${TRITON_CACHE_DIR} && \
-    chmod -R 777 ${TRITON_CACHE_DIR}
+    chmod -R 700 ${TRITON_CACHE_DIR}
 
 # 7. Copy Project Code
 # This copies all files from your project's build context into the image at /workspace.

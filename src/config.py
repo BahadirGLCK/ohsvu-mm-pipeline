@@ -34,11 +34,15 @@ SAMPLING_STRATEGY = "uniform"  # "uniform" | "stride" | "random" | "index"
 LORA_CONFIG = {
     "r": 16,
     "lora_alpha": 16,
-    "lora_dropout": 0.05,
+    "lora_dropout": 0,
+    "bias": "none",
     "target_modules": ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
     "finetune_vision_layers": True,
     "finetune_language_layers": True,
+    "finetune_attention_modules": True,
+    "finetune_mlp_modules":True,
     "use_rslora": True,
+    "loftq_config" : None,
     "random_state": RANDOM_SEED, # Reuse general random seed or specify another
 }
 
@@ -62,6 +66,11 @@ TRAINING_ARGS_CONFIG = {
     "fp16": False,
     "bf16": True,
     "optim": "adamw_8bit",
+    "remove_unused_columns" : False,
+    "dataset_text_field" : "",
+    "dataset_kwargs" : {"skip_prepare_dataset": True},
+    "dataset_num_proc" : 4,
+    "max_seq_length" : MAX_SEQ_LEN_FINETUNE,
 }
 
 # --- Evaluation Hyperparameters ---
@@ -73,7 +82,7 @@ EVAL_RANDOM_SEED_SAMPLING = RANDOM_SEED
 
 # Generation parameters for evaluation
 EVAL_GENERATION_CONFIG = {
-    "max_new_tokens": 2000,
+    "max_new_tokens": MAX_SEQ_LEN_EVAL,
     "temperature": 0.2,
     "top_p": 0.95,
 }

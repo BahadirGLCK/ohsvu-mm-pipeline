@@ -6,10 +6,9 @@ import pandas as pd
 # from datasets import Dataset # Dataset class is not directly used, examples are lists of dicts
 from unsloth import FastVisionModel
 from unsloth.trainer import (
-    UnslothVisionDataCollator,
-    UnslothTrainer,
-    UnslothTrainingArguments,
+    UnslothVisionDataCollator
 )
+from trl import SFTTrainer, SFTConfig
 from transformers import AutoProcessor
 
 from .utils import row_to_example
@@ -176,18 +175,17 @@ class Trainer:
         self.logger.info(f"Training arguments configured. Output directory: {finetuned_model_output_dir}")
         self.logger.debug(f"Training args: {current_training_args}")
         
-        trainer = UnslothTrainer(
+        trainer = SFTTrainer(
             model=self.model,
             tokenizer=self.tokenizer,
             train_dataset=self.train_ds, 
             eval_dataset=self.eval_ds,   
             data_collator=dc,
-            max_seq_length=self.config.MAX_SEQ_LEN_FINETUNE,
-            args=UnslothTrainingArguments(**current_training_args),
+            args=SFTConfig(**current_training_args),
         )
-        self.logger.info(f"UnslothTrainer initialized. Starting training...")
+        self.logger.info(f"SFTTrainer initialized. Starting training...")
         #TODO: Make this step can start from a checkpoint.
-        trainer.train()
+        trainer_stats = trainer.train()
         self.logger.info("Training finished.")
         return self.model 
 

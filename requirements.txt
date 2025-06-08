@@ -3,7 +3,7 @@ unsloth
 tensorboard==1.14.0
 opencv-python
 pillow
-qwen-vl-utils[decord]==0.0.8
+qwen-vl-utils
 PyYAML
 hydra-core 
 scikit-learn 
