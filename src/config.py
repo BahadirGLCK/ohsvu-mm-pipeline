@@ -93,4 +93,4 @@ EVAL_SPLIT_RATIO = 0.15
 # TEST_SPLIT_RATIO is implicitly 1 - TRAIN_SPLIT_RATIO - EVAL_SPLIT_RATIO
 
 # --- Metrics Configuration (for evaluation script) ---
-OBJECT_KEYS_FOR_METRICS = ["forklifts", "pedestrians", "drivers", "trucks"] 
+OBJECT_KEYS_FOR_METRICS = ["forklift_count", "pedestrian_count", "forklift_driver_count", "truck_count"] 

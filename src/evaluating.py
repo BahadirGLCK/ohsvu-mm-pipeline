@@ -346,23 +346,26 @@ class Evaluator:
             }
             all_predictions_for_file.append(current_prediction_record)
 
-            if not pred_json: 
-                self.logger.warning(f"Skipping metrics for {video_name_with_ext} due to empty/failed prediction.")
-                true_counts.append(tuple(0 for _ in self.metric_obj_keys))
-                pred_counts.append(tuple(0 for _ in self.metric_obj_keys))
-                true_risks.append([]) 
-                pred_risks.append([])
-                continue
-
+            # Object Counts Metrics Data
             true_obj_counts_dict = parsed_gt_json.get("object_counts", {})
-            pred_obj_counts_dict = pred_json.get("object_counts", {})
+            pred_obj_counts_dict = pred_json.get("object_counts", {}) if pred_json else {}
             true_counts.append(tuple(true_obj_counts_dict.get(k, 0) for k in self.metric_obj_keys))
             pred_counts.append(tuple(pred_obj_counts_dict.get(k, 0) for k in self.metric_obj_keys))
-            
+
+            # Risk Detection Metrics Data
             true_detected_risks_list = parsed_gt_json.get("detected_risks", [])
-            pred_detected_risks_list = pred_json.get("detected_risks", [])
-            true_risks.append(sorted([str(r).lower() for r in true_detected_risks_list]))
-            pred_risks.append(sorted([str(r).lower() for r in pred_detected_risks_list]))
+            pred_detected_risks_list = pred_json.get("detected_risks", []) if pred_json else []
+            
+            # Extract risk numbers, assuming 'risk_number' is the key. Store as sets for later comparison.
+            true_risk_numbers = {
+                r['risk_number'] for r in true_detected_risks_list if isinstance(r, dict) and 'risk_number' in r
+            }
+            pred_risk_numbers = {
+                r['risk_number'] for r in pred_detected_risks_list if isinstance(r, dict) and 'risk_number' in r
+            }
+
+            true_risks.append(true_risk_numbers)
+            pred_risks.append(pred_risk_numbers)
         
         self.logger.info(f"Collected {len(all_predictions_for_file)} predictions/ground truths.")
         return true_counts, pred_counts, true_risks, pred_risks, all_predictions_for_file
@@ -424,7 +427,9 @@ class Evaluator:
         msg_risks = "Not enough valid data for risk detection P/R/F1 metrics."
         if true_risks and pred_risks and len(true_risks) == len(pred_risks) and len(true_risks) > 0:
             try:
-                # Filter out -1 (used as a placeholder for no prediction) before creating all_labels
+                # The data in true_risks/pred_risks are now sets of risk numbers.
+                # The placeholder -1 is not expected to be present with the new logic,
+                # but filtering is harmless.
                 valid_true_risks = [s - {-1} for s in true_risks]
                 valid_pred_risks = [s - {-1} for s in pred_risks]
 
@@ -442,7 +447,7 @@ class Evaluator:
                         msg_risks = "No positive risk labels identified in ground truth or predictions after filtering. P/R/F1 are undefined or 0."
                         self.logger.warning(msg_risks)
                 else:
-                    msg_risks = "No valid risk labels (other than -1) found after processing. Cannot calculate P/R/F1."
+                    msg_risks = "No valid risk labels found after processing. Cannot calculate P/R/F1."
                     self.logger.warning(msg_risks)
             except Exception as e:
                 self.logger.error(f"Error calculating risk detection metrics: {e}", exc_info=True)
