@@ -240,56 +240,57 @@ class Evaluator:
             ohs_prompt_text (str): The OHS prompt string.
         """
         self.logger.info("Preparing evaluation data...")
-        data_split_dir_name = self.exp_manager.get_config_value("DATA_SPLIT_DIR_NAME", main_config_module=self.global_config)
-        video_names_path = self.exp_manager.get_data_split_dir(data_split_dir_name) / "test_video_names.txt"
         
-        csv_gt_path = pathlib.Path(self.global_config.CSV_PATH)
+        # Determine path to test video names file from the experiment directory
+        data_split_dir = self.exp_manager.get_data_split_dir(self.global_config.DATA_SPLIT_DIR_NAME)
+        test_video_names_path = data_split_dir / "test_video_names.txt"
+        
+        # Load the test video names, which are ordered and will be used to create test_examples
+        self.test_ordered_video_names = self._load_video_names(test_video_names_path)
+        if not self.test_ordered_video_names:
+            self.logger.critical(f"No test video names found in {test_video_names_path}. Cannot proceed with evaluation.")
+            sys.exit(1)
 
-        if not video_names_path.exists():
-            self.logger.critical(f"Test video names file not found at {video_names_path}. Cannot prepare evaluation data."); sys.exit(1)
-        video_names_to_test = self._load_video_names(video_names_path)
-        if not video_names_to_test:
-             self.logger.warning(f"No video names loaded from {video_names_path}. Test set will be empty.")
-             self.test_examples = []
-             self.test_ordered_video_names = []
-             self.test_ground_truth_map = {}
-             return
-        self.logger.info(f"Loaded {len(video_names_to_test)} video names for testing from {video_names_path}")
-        
-        if not csv_gt_path.exists():
-            self.logger.critical(f"Ground truth CSV file not found at {csv_gt_path}. Cannot prepare evaluation data."); sys.exit(1)
-        
+        # Load the original CSV to get ground truth answers
         try:
-            raw_df = pd.read_csv(csv_gt_path, header=None, names=["video_name", "gemini_answer"], encoding="utf-8")
-            # Filter for the videos that are in the current test set
-            test_df = raw_df[raw_df["video_name"].isin(video_names_to_test)].copy() # Use .copy() to avoid SettingWithCopyWarning
+            ground_truth_df = pd.read_csv(
+                self.global_config.CSV_PATH, 
+                header=None, 
+                names=["video_name", "gemini_answer"],
+                encoding="utf-8"
+            )
+            # Create a dictionary for quick lookup of ground truth answers.
+            # Key: video_name (string), Value: gemini_answer (string)
+            self.test_ground_truth_map = pd.Series(
+                ground_truth_df.gemini_answer.values, 
+                index=ground_truth_df.video_name
+            ).to_dict()
+            self.logger.info(f"Loaded {len(self.test_ground_truth_map)} ground truth answers from {self.global_config.CSV_PATH}")
+        except FileNotFoundError:
+            self.logger.critical(f"Ground truth CSV file not found at {self.global_config.CSV_PATH}. Cannot proceed.")
+            sys.exit(1)
+
+        # Prepare test examples for the model
+        self.test_examples = []
+        for video_name_with_ext in self.test_ordered_video_names:
+            # Bug Fix: The CSV has video names *without* extension.
+            # We must remove the extension before using it as a key for the ground truth map.
+            video_name_no_ext = pathlib.Path(video_name_with_ext).stem
             
-            # Ensure the order of test_df matches video_names_to_test if strict order is paramount
-            # For now, pd.DataFrame.isin followed by iteration should be deterministic if video_names_to_test order matters.
-            # A more robust way for strict ordering based on video_names_to_test:
-            test_df['video_name'] = pd.Categorical(test_df['video_name'], categories=video_names_to_test, ordered=True)
-            test_df = test_df.sort_values('video_name').reset_index(drop=True)
-            # Filter out any videos that might have been in video_names_to_test but not in raw_df
-            test_df = test_df[test_df['video_name'].isin(raw_df['video_name'])]
-
-        except Exception as e:
-            self.logger.critical(f"Failed to load or process ground truth CSV from {csv_gt_path}: {e}"); sys.exit(1)
-
-        if test_df.empty:
-            self.logger.warning(f"No matching videos found in CSV ({csv_gt_path}) for the test set defined in {video_names_path}. Evaluation will have no samples.")
-            self.test_examples = []
-            self.test_ordered_video_names = []
-            self.test_ground_truth_map = {}
-            return
+            # Construct a dummy row for row_to_example, which needs 'video_name' and 'gemini_answer'
+            # The 'gemini_answer' here is the ground truth, used by row_to_example to formulate the assistant's turn.
+            # For inference, this part of the example will be stripped out before sending to the model,
+            # but it is needed to create the example structure consistently.
+            dummy_row = pd.Series({
+                "video_name": video_name_with_ext,
+                "gemini_answer": self.test_ground_truth_map.get(video_name_no_ext, "") # Use name without extension
+            })
+            
+            # The row_to_example function creates the structured message for the model
+            model_input_data = row_to_example(dummy_row, ohs_prompt_text)
+            self.test_examples.append(model_input_data)
         
-        self.test_examples = [row_to_example(r, ohs_prompt_text)
-                              for _, r in tqdm(test_df.iterrows(), total=len(test_df), desc="Preparing test examples")]
-        
-        self.test_ordered_video_names = test_df["video_name"].tolist()
-        self.test_ground_truth_map = {row["video_name"]: row["gemini_answer"] for _, row in test_df.iterrows()}
-        
-        self.logger.info(f"Prepared {len(self.test_examples)} test examples for evaluation.")
-        self.logger.info(f"Stored {len(self.test_ordered_video_names)} ordered video names and {len(self.test_ground_truth_map)} ground truth entries.")
+        self.logger.info(f"Prepared {len(self.test_examples)} examples for evaluation from the test set.")
 
     def collect_predictions_and_ground_truths(self) -> tuple[list, list, list, list, list]:
         """
@@ -318,12 +319,14 @@ class Evaluator:
         all_predictions_for_file = []
 
         for idx, sample in enumerate(tqdm(self.test_examples, desc="Generating predictions")):
-            video_name_for_log = self.test_ordered_video_names[idx]
-            self.logger.debug(f"Processing for evaluation: {video_name_for_log}")
+            video_name_with_ext = self.test_ordered_video_names[idx]
+            self.logger.debug(f"Processing for evaluation: {video_name_with_ext}")
 
             pred_json = self._generate_reply_for_sample(sample)
-
-            gt_json_str = self.test_ground_truth_map.get(video_name_for_log)
+            
+            # Bug Fix: The map key is the video name *without* the extension.
+            video_name_no_ext = pathlib.Path(video_name_with_ext).stem
+            gt_json_str = self.test_ground_truth_map.get(video_name_no_ext)
             parsed_gt_json = {}
             if gt_json_str:
                 try:
@@ -332,19 +335,19 @@ class Evaluator:
                     elif isinstance(gt_json_str, dict): # Should not happen if from CSV
                         parsed_gt_json = gt_json_str
                 except json.JSONDecodeError:
-                    self.logger.warning(f"Could not parse ground truth JSON for {video_name_for_log}. GT text: {gt_json_str}")
+                    self.logger.warning(f"Could not parse ground truth JSON for {video_name_with_ext}. GT text: {gt_json_str}")
             else:
-                self.logger.warning(f"No ground truth data found in map for video: {video_name_for_log}")
+                self.logger.warning(f"No ground truth data found in map for video: {video_name_with_ext}")
             
             current_prediction_record = {
-                "video_name": video_name_for_log, 
+                "video_name": video_name_with_ext, 
                 "prediction": pred_json if pred_json else {},
                 "ground_truth": parsed_gt_json
             }
             all_predictions_for_file.append(current_prediction_record)
 
             if not pred_json: 
-                self.logger.warning(f"Skipping metrics for {video_name_for_log} due to empty/failed prediction.")
+                self.logger.warning(f"Skipping metrics for {video_name_with_ext} due to empty/failed prediction.")
                 true_counts.append(tuple(0 for _ in self.metric_obj_keys))
                 pred_counts.append(tuple(0 for _ in self.metric_obj_keys))
                 true_risks.append([]) 
