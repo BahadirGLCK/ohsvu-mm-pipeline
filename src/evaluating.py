@@ -273,9 +273,6 @@ class Evaluator:
         # Prepare test examples for the model
         self.test_examples = []
         for video_name_with_ext in self.test_ordered_video_names:
-            # Bug Fix: The CSV has video names *without* extension.
-            # We must remove the extension before using it as a key for the ground truth map.
-            video_name_no_ext = pathlib.Path(video_name_with_ext).stem
             
             # Construct a dummy row for row_to_example, which needs 'video_name' and 'gemini_answer'
             # The 'gemini_answer' here is the ground truth, used by row_to_example to formulate the assistant's turn.
@@ -283,7 +280,7 @@ class Evaluator:
             # but it is needed to create the example structure consistently.
             dummy_row = pd.Series({
                 "video_name": video_name_with_ext,
-                "gemini_answer": self.test_ground_truth_map.get(video_name_no_ext, "") # Use name without extension
+                "gemini_answer": self.test_ground_truth_map.get(video_name_with_ext, "") # Use name without extension
             })
             
             # The row_to_example function creates the structured message for the model
@@ -324,14 +321,17 @@ class Evaluator:
 
             pred_json = self._generate_reply_for_sample(sample)
             
-            # Bug Fix: The map key is the video name *without* the extension.
-            video_name_no_ext = pathlib.Path(video_name_with_ext).stem
-            gt_json_str = self.test_ground_truth_map.get(video_name_no_ext)
+            gt_json_str = self.test_ground_truth_map.get(video_name_with_ext)
             parsed_gt_json = {}
             if gt_json_str:
                 try:
                     if isinstance(gt_json_str, str):
-                        parsed_gt_json = json.loads(gt_json_str)
+                        # Ground truth might also be wrapped in markdown like predictions
+                        match = re.search(r"\{[\s\S]*\}", gt_json_str)
+                        if match:
+                            parsed_gt_json = json.loads(match.group())
+                        else:
+                            self.logger.warning(f"No JSON-like structure found in ground truth for {video_name_with_ext}. GT text: {gt_json_str}")
                     elif isinstance(gt_json_str, dict): # Should not happen if from CSV
                         parsed_gt_json = gt_json_str
                 except json.JSONDecodeError:
