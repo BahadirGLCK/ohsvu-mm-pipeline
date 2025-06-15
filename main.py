@@ -39,6 +39,7 @@ def run_pipeline(args: argparse.Namespace) -> None:
                                    - skip_finetuning (bool)
                                    - skip_evaluation (bool)
                                    - eval_experiment_dir (str | None)
+                                   - checkpoint_path (str | None)
     """
     logger.info("Starting the OHSVU pipeline...")
     logger.debug(f"Pipeline called with arguments: {args}")
@@ -51,7 +52,7 @@ def run_pipeline(args: argparse.Namespace) -> None:
         try:
             # main_finetune_process creates a new experiment dir and returns its path.
             # It uses ExperimentManager, which sets up its own experiment-specific logger.
-            experiment_dir_from_finetuning = main_finetune_process()
+            experiment_dir_from_finetuning = main_finetune_process(checkpoint_path=args.checkpoint_path)
             if experiment_dir_from_finetuning and experiment_dir_from_finetuning.is_dir():
                 logger.info(f"Finetuning completed. Artifacts and logs in: {experiment_dir_from_finetuning}")
                 logger.info(f"Check main log: {experiment_dir_from_finetuning / 'experiment_run.log'}")
@@ -129,6 +130,13 @@ if __name__ == "__main__":
         default=None, # No default, evaluation path must be explicit or from finetuning
         help="Path to a specific, pre-existing experiment directory to be used for evaluation. "
              "If finetuning is run, its output directory is used for evaluation unless this is set."
+    )
+    parser.add_argument(
+        "--checkpoint_path",
+        type=str,
+        default=None,
+        help="Path to a specific checkpoint directory to resume training from. "
+             "If not provided, training will start from scratch."
     )
     
     parsed_args = parser.parse_args()

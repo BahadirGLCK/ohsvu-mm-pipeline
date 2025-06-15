@@ -153,11 +153,15 @@ class Trainer:
         self.logger.info("Model initialized, LoRA applied, and prepared for training.")
         return self.model, self.tokenizer, self.processor
 
-    def train_model(self) -> any:
+    def train_model(self, checkpoint_path: str | None = None) -> any:
         """
         Configures and runs the UnslothTrainer to finetune the model.
         Relies on `initialize_and_prepare_model` and `prepare_data_splits` 
         having been called.
+
+        Args:
+            checkpoint_path (str | None): Path to a checkpoint directory to resume training from.
+                                         If None, training will start from scratch.
 
         Returns:
             The trained model instance (modified in-place).
@@ -172,6 +176,12 @@ class Trainer:
         current_training_args = self.config.TRAINING_ARGS_CONFIG.copy()
         finetuned_model_output_dir = self.exp_manager.get_finetuned_model_dir(self.config.FINETUNED_MODEL_DIR_NAME)
         current_training_args["output_dir"] = str(finetuned_model_output_dir)
+        
+        # Add checkpoint path to training args if provided
+        if checkpoint_path:
+            current_training_args["resume_from_checkpoint"] = checkpoint_path
+            self.logger.info(f"Will resume training from checkpoint: {checkpoint_path}")
+        
         self.logger.info(f"Training arguments configured. Output directory: {finetuned_model_output_dir}")
         self.logger.debug(f"Training args: {current_training_args}")
         
@@ -184,7 +194,6 @@ class Trainer:
             args=SFTConfig(**current_training_args),
         )
         self.logger.info(f"SFTTrainer initialized. Starting training...")
-        #TODO: Make this step can start from a checkpoint.
         trainer_stats = trainer.train()
         self.logger.info("Training finished.")
         return self.model 
@@ -218,32 +227,33 @@ class Trainer:
         self.model.save_pretrained_merged(str(merged_model_path), self.tokenizer)
         self.logger.info("Model artifacts saving complete.")
 
-    def run_training_pipeline(self) -> pathlib.Path:
+    def run_training_pipeline(self, checkpoint_path: str | None = None) -> pathlib.Path:
         """
-        Executes the full training pipeline: data preparation, model initialization,
-        training, and artifact saving.
+        Runs the complete training pipeline: data preparation, model initialization,
+        training, and saving artifacts.
+
+        Args:
+            checkpoint_path (str | None): Path to a checkpoint directory to resume training from.
+                                         If None, training will start from scratch.
 
         Returns:
-            pathlib.Path: Path to the current experiment directory.
-        
-        Raises:
-            Exception: Propagates any exception that occurs during the pipeline after logging it.
+            pathlib.Path: The path to the experiment directory where artifacts and logs 
+                         for this training run are stored.
         """
-        self.logger.info(f"Starting full training pipeline for experiment: {self.exp_manager.current_experiment_path}")
+        self.logger.info("Starting training pipeline...")
         
-        try:
-            with open(self.config.OHS_PROMPT_PATH, "r", encoding="utf-8") as f:
-                ohs_prompt = f.read().strip()
-            self.logger.info(f"Loaded OHS prompt from {self.config.OHS_PROMPT_PATH}")
-
-            self.prepare_data_splits(ohs_prompt)
-            self.save_data_split_info()
-            self.initialize_and_prepare_model()
-            self.train_model() # Model is updated in-place
-            self.save_model_artifacts()
-            
-            self.logger.info(f"Training pipeline completed successfully. All artifacts saved in: {self.exp_manager.current_experiment_path}")
-            return self.exp_manager.current_experiment_path
-        except Exception as e:
-            self.logger.exception(f"Critical error during training pipeline for experiment {self.exp_manager.current_experiment_path}. Details: {e}")
-            raise 
+        # Step 1: Prepare data splits
+        self.prepare_data_splits(self.config.OHS_PROMPT)
+        self.save_data_split_info()
+        
+        # Step 2: Initialize and prepare model
+        self.initialize_and_prepare_model()
+        
+        # Step 3: Train model
+        self.train_model(checkpoint_path=checkpoint_path)
+        
+        # Step 4: Save model artifacts
+        self.save_model_artifacts()
+        
+        self.logger.info("Training pipeline completed successfully.")
+        return self.exp_manager.current_experiment_path 

@@ -35,13 +35,17 @@ logger = logging.getLogger(__name__)
 # Trainer class (src/training.py). They are removed from here to avoid duplication
 # and to centralize training logic within the Trainer class.
 
-def main_finetune_process() -> pathlib.Path:
+def main_finetune_process(checkpoint_path: str | None = None) -> pathlib.Path:
     """
     Orchestrates the model finetuning process.
 
     This function initializes an ExperimentManager to create a new experiment run,
     saves a snapshot of the global configuration, and then instantiates and runs
     the Trainer's training pipeline.
+
+    Args:
+        checkpoint_path (str | None): Path to a checkpoint directory to resume training from.
+                                     If None, training will start from scratch.
 
     Returns:
         pathlib.Path: The path to the experiment directory where artifacts and logs 
@@ -64,13 +68,15 @@ def main_finetune_process() -> pathlib.Path:
     exp_manager.save_config_snapshot(global_config)
 
     effective_logger.info(f"Starting finetuning process for experiment: {current_experiment_path}")
+    if checkpoint_path:
+        effective_logger.info(f"Resuming from checkpoint: {checkpoint_path}")
 
     # Instantiate the Trainer, passing the global config and the initialized ExperimentManager
     trainer_instance = Trainer(config=global_config, experiment_manager=exp_manager)
     
     try:
         # The Trainer's pipeline handles all steps: data prep, model init, training, saving
-        trained_experiment_path = trainer_instance.run_training_pipeline()
+        trained_experiment_path = trainer_instance.run_training_pipeline(checkpoint_path=checkpoint_path)
         effective_logger.info(f"Finetuning pipeline completed successfully. Artifacts in: {trained_experiment_path}")
         return trained_experiment_path
     except Exception as e:
