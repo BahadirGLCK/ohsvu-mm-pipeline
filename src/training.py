@@ -181,7 +181,7 @@ class Trainer:
         # Handle checkpoint resumption
         if continue_experiment:
             if checkpoint_path:
-                current_training_args["resume_from_checkpoint"] = checkpoint_path
+                resume_from_checkpoint = checkpoint_path
                 self.logger.info(f"Will resume training from specified checkpoint: {checkpoint_path}")
             else:
                 # Find the latest checkpoint in the experiment directory
@@ -192,7 +192,7 @@ class Trainer:
                 )
                 if checkpoint_dirs:
                     latest_checkpoint = checkpoint_dirs[0]
-                    current_training_args["resume_from_checkpoint"] = str(latest_checkpoint)
+                    resume_from_checkpoint = str(latest_checkpoint)
                     self.logger.info(f"Will resume training from latest checkpoint: {latest_checkpoint}")
                 else:
                     self.logger.warning("No checkpoints found in experiment directory. Starting from scratch.")
@@ -209,7 +209,10 @@ class Trainer:
             args=SFTConfig(**current_training_args),
         )
         self.logger.info(f"SFTTrainer initialized. Starting training...")
-        trainer_stats = trainer.train()
+        if continue_experiment: 
+            trainer_stats = trainer.train(resume_from_checkpoint=resume_from_checkpoint)
+        else:   
+            trainer_stats = trainer.train()
         self.logger.info("Training finished.")
         return self.model 
 
