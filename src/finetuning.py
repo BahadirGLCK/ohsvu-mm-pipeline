@@ -35,17 +35,19 @@ logger = logging.getLogger(__name__)
 # Trainer class (src/training.py). They are removed from here to avoid duplication
 # and to centralize training logic within the Trainer class.
 
-def main_finetune_process(checkpoint_path: str | None = None) -> pathlib.Path:
+def main_finetune_process(continue_experiment: str | None = None, checkpoint_path: str | None = None) -> pathlib.Path:
     """
     Orchestrates the model finetuning process.
 
-    This function initializes an ExperimentManager to create a new experiment run,
+    This function either initializes a new experiment or continues an existing one,
     saves a snapshot of the global configuration, and then instantiates and runs
     the Trainer's training pipeline.
 
     Args:
-        checkpoint_path (str | None): Path to a checkpoint directory to resume training from.
-                                     If None, training will start from scratch.
+        continue_experiment (str | None): Path to an existing experiment directory to continue training from.
+                                         If None, a new experiment will be created.
+        checkpoint_path (str | None): Path to a specific checkpoint within the experiment directory to resume from.
+                                     If None, will use the latest checkpoint in the experiment directory.
 
     Returns:
         pathlib.Path: The path to the experiment directory where artifacts and logs 
@@ -53,30 +55,48 @@ def main_finetune_process(checkpoint_path: str | None = None) -> pathlib.Path:
                       return the path for inspection of partial results.
     """
     
-    exp_manager = ExperimentManager(
-        global_config.EXPERIMENT_ROOT_DIR, 
-        experiment_name_prefix="finetune" # Specific prefix for finetuning experiments
-    )
-    # create_new_experiment also initializes exp_manager.logger
-    current_experiment_path = exp_manager.create_new_experiment()
+    if continue_experiment:
+        # Use existing experiment directory
+        current_experiment_path = pathlib.Path(continue_experiment).resolve()
+        if not current_experiment_path.is_dir():
+            raise ValueError(f"Experiment directory not found: {continue_experiment}")
+        
+        exp_manager = ExperimentManager(
+            global_config.EXPERIMENT_ROOT_DIR,
+            experiment_name_prefix="finetune"
+        )
+        exp_manager.current_experiment_path = current_experiment_path
+        exp_manager._setup_experiment_logger()  # Initialize logger for the existing experiment
+    else:
+        # Create new experiment
+        exp_manager = ExperimentManager(
+            global_config.EXPERIMENT_ROOT_DIR, 
+            experiment_name_prefix="finetune"
+        )
+        current_experiment_path = exp_manager.create_new_experiment()
     
     # Use the logger from ExperimentManager as it's configured for the specific experiment
-    # Fallback to module logger only if exp_manager.logger is somehow not set (should not happen).
     effective_logger = exp_manager.logger if exp_manager.logger else logger
 
-    effective_logger.info(f"Saving global configuration snapshot for experiment: {current_experiment_path}")
-    exp_manager.save_config_snapshot(global_config)
+    if not continue_experiment:
+        effective_logger.info(f"Saving global configuration snapshot for experiment: {current_experiment_path}")
+        exp_manager.save_config_snapshot(global_config)
 
     effective_logger.info(f"Starting finetuning process for experiment: {current_experiment_path}")
     if checkpoint_path:
         effective_logger.info(f"Resuming from checkpoint: {checkpoint_path}")
+    elif continue_experiment:
+        effective_logger.info("Continuing from latest checkpoint in experiment directory")
 
     # Instantiate the Trainer, passing the global config and the initialized ExperimentManager
     trainer_instance = Trainer(config=global_config, experiment_manager=exp_manager)
     
     try:
         # The Trainer's pipeline handles all steps: data prep, model init, training, saving
-        trained_experiment_path = trainer_instance.run_training_pipeline(checkpoint_path=checkpoint_path)
+        trained_experiment_path = trainer_instance.run_training_pipeline(
+            continue_experiment=continue_experiment,
+            checkpoint_path=checkpoint_path
+        )
         effective_logger.info(f"Finetuning pipeline completed successfully. Artifacts in: {trained_experiment_path}")
         return trained_experiment_path
     except Exception as e:

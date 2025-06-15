@@ -153,15 +153,16 @@ class Trainer:
         self.logger.info("Model initialized, LoRA applied, and prepared for training.")
         return self.model, self.tokenizer, self.processor
 
-    def train_model(self, checkpoint_path: str | None = None) -> any:
+    def train_model(self, continue_experiment: str | None = None, checkpoint_path: str | None = None) -> any:
         """
         Configures and runs the UnslothTrainer to finetune the model.
         Relies on `initialize_and_prepare_model` and `prepare_data_splits` 
         having been called.
 
         Args:
-            checkpoint_path (str | None): Path to a checkpoint directory to resume training from.
-                                         If None, training will start from scratch.
+            continue_experiment (str | None): Path to an existing experiment directory to continue training from.
+            checkpoint_path (str | None): Path to a specific checkpoint within the experiment directory to resume from.
+                                         If None and continue_experiment is set, will use the latest checkpoint.
 
         Returns:
             The trained model instance (modified in-place).
@@ -177,10 +178,24 @@ class Trainer:
         finetuned_model_output_dir = self.exp_manager.get_finetuned_model_dir(self.config.FINETUNED_MODEL_DIR_NAME)
         current_training_args["output_dir"] = str(finetuned_model_output_dir)
         
-        # Add checkpoint path to training args if provided
-        if checkpoint_path:
-            current_training_args["resume_from_checkpoint"] = checkpoint_path
-            self.logger.info(f"Will resume training from checkpoint: {checkpoint_path}")
+        # Handle checkpoint resumption
+        if continue_experiment:
+            if checkpoint_path:
+                current_training_args["resume_from_checkpoint"] = checkpoint_path
+                self.logger.info(f"Will resume training from specified checkpoint: {checkpoint_path}")
+            else:
+                # Find the latest checkpoint in the experiment directory
+                checkpoint_dirs = sorted(
+                    [d for d in finetuned_model_output_dir.glob("checkpoint-*") if d.is_dir()],
+                    key=lambda x: int(x.name.split("-")[-1]),
+                    reverse=True
+                )
+                if checkpoint_dirs:
+                    latest_checkpoint = checkpoint_dirs[0]
+                    current_training_args["resume_from_checkpoint"] = str(latest_checkpoint)
+                    self.logger.info(f"Will resume training from latest checkpoint: {latest_checkpoint}")
+                else:
+                    self.logger.warning("No checkpoints found in experiment directory. Starting from scratch.")
         
         self.logger.info(f"Training arguments configured. Output directory: {finetuned_model_output_dir}")
         self.logger.debug(f"Training args: {current_training_args}")
@@ -227,14 +242,15 @@ class Trainer:
         self.model.save_pretrained_merged(str(merged_model_path), self.tokenizer)
         self.logger.info("Model artifacts saving complete.")
 
-    def run_training_pipeline(self, checkpoint_path: str | None = None) -> pathlib.Path:
+    def run_training_pipeline(self, continue_experiment: str | None = None, checkpoint_path: str | None = None) -> pathlib.Path:
         """
         Runs the complete training pipeline: data preparation, model initialization,
         training, and saving artifacts.
 
         Args:
-            checkpoint_path (str | None): Path to a checkpoint directory to resume training from.
-                                         If None, training will start from scratch.
+            continue_experiment (str | None): Path to an existing experiment directory to continue training from.
+            checkpoint_path (str | None): Path to a specific checkpoint within the experiment directory to resume from.
+                                         If None and continue_experiment is set, will use the latest checkpoint.
 
         Returns:
             pathlib.Path: The path to the experiment directory where artifacts and logs 
@@ -250,7 +266,7 @@ class Trainer:
         self.initialize_and_prepare_model()
         
         # Step 3: Train model
-        self.train_model(checkpoint_path=checkpoint_path)
+        self.train_model(continue_experiment=continue_experiment, checkpoint_path=checkpoint_path)
         
         # Step 4: Save model artifacts
         self.save_model_artifacts()

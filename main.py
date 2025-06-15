@@ -30,7 +30,7 @@ def run_pipeline(args: argparse.Namespace) -> None:
     and evaluation stages based on the provided command-line arguments.
 
     The pipeline manages experiment directories and allows specifying an existing
-    experiment for evaluation.
+    experiment for evaluation or continuation.
 
     Args:
         args (argparse.Namespace): Parsed command-line arguments controlling 
@@ -39,6 +39,7 @@ def run_pipeline(args: argparse.Namespace) -> None:
                                    - skip_finetuning (bool)
                                    - skip_evaluation (bool)
                                    - eval_experiment_dir (str | None)
+                                   - continue_experiment (str | None)
                                    - checkpoint_path (str | None)
     """
     logger.info("Starting the OHSVU pipeline...")
@@ -50,9 +51,16 @@ def run_pipeline(args: argparse.Namespace) -> None:
     if not args.skip_finetuning:
         logger.info("--- Initiating Step 1: Finetuning ---")
         try:
-            # main_finetune_process creates a new experiment dir and returns its path.
-            # It uses ExperimentManager, which sets up its own experiment-specific logger.
-            experiment_dir_from_finetuning = main_finetune_process(checkpoint_path=args.checkpoint_path)
+            if args.continue_experiment:
+                logger.info(f"Continuing training in existing experiment: {args.continue_experiment}")
+                experiment_dir_from_finetuning = main_finetune_process(
+                    continue_experiment=args.continue_experiment,
+                    checkpoint_path=args.checkpoint_path
+                )
+            else:
+                logger.info("Starting new training experiment")
+                experiment_dir_from_finetuning = main_finetune_process()
+                
             if experiment_dir_from_finetuning and experiment_dir_from_finetuning.is_dir():
                 logger.info(f"Finetuning completed. Artifacts and logs in: {experiment_dir_from_finetuning}")
                 logger.info(f"Check main log: {experiment_dir_from_finetuning / 'experiment_run.log'}")
@@ -60,7 +68,7 @@ def run_pipeline(args: argparse.Namespace) -> None:
                 logger.warning("Finetuning process finished but did not return a valid experiment directory path. Evaluation might be affected.")
         except Exception as e:
             logger.error(f"A critical error occurred during the finetuning process: {e}", exc_info=True)
-            experiment_dir_from_finetuning = None # Ensure it's None if finetuning failed
+            experiment_dir_from_finetuning = None
             logger.info("Finetuning step failed. Proceeding according to pipeline arguments.")
     else:
         logger.info("--- Skipping Finetuning step as per --skip_finetuning argument. ---")
@@ -127,16 +135,23 @@ if __name__ == "__main__":
     parser.add_argument(
         "--eval_experiment_dir", 
         type=str, 
-        default=None, # No default, evaluation path must be explicit or from finetuning
+        default=None,
         help="Path to a specific, pre-existing experiment directory to be used for evaluation. "
              "If finetuning is run, its output directory is used for evaluation unless this is set."
+    )
+    parser.add_argument(
+        "--continue_experiment",
+        type=str,
+        default=None,
+        help="Path to an existing experiment directory to continue training from. "
+             "If specified, training will continue in this directory instead of creating a new one."
     )
     parser.add_argument(
         "--checkpoint_path",
         type=str,
         default=None,
-        help="Path to a specific checkpoint directory to resume training from. "
-             "If not provided, training will start from scratch."
+        help="Path to a specific checkpoint within the experiment directory to resume from. "
+             "If not provided, will use the latest checkpoint in the experiment directory."
     )
     
     parsed_args = parser.parse_args()
