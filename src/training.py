@@ -259,7 +259,7 @@ class Trainer:
         self.logger.info("Starting training pipeline...")
         
         # Step 1: Prepare data splits
-        self.prepare_data_splits(self.config.OHS_PROMPT)
+        self.prepare_data_splits(self.config.OHS_PROMPT_PATH)
         self.save_data_split_info()
         
         # Step 2: Initialize and prepare model
