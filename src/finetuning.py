@@ -65,7 +65,7 @@ def main_finetune_process(continue_experiment: str | None = None, checkpoint_pat
             global_config.EXPERIMENT_ROOT_DIR,
             experiment_name_prefix="finetune"
         )
-        exp_manager.current_experiment_path = current_experiment_path
+        exp_manager._current_experiment_path = current_experiment_path
         exp_manager._setup_experiment_logger()  # Initialize logger for the existing experiment
     else:
         # Create new experiment
