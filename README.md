@@ -1,16 +1,16 @@
-# Project OHSVU
+# Project Unsloth-VLM-Pipeline
 
 This project focuses on fine-tuning and evaluating vision-language models with Unsloth.
 
 ## Project Structure
 
 ```
-ohsvu/
+unsloth-vlm-pipeline/
 ├── configs/                # Global configuration files (not specific to one experiment)
 ├── data/
 │   └── inputs/             # Raw input data (prompts, CSVs, videos)
-│       ├── OHS_PROMPT_v2.txt
-│       ├── gemini_pro_v3_outputs.csv
+│       ├── PROMPT.txt
+│       ├── ground_truth.csv
 │       └── vlm_videos/     # Video files
 ├── experiments/            # Output directory for all finetuning/evaluation runs
 │   └── YYYY-MM-DD_HH-MM-SS_finetune/ # Example experiment directory
@@ -24,7 +24,7 @@ ohsvu/
 ├── scripts/                # Standalone execution scripts for individual processes
 │   ├── run_finetuning.py
 │   └── run_evaluation.py
-├── src/                    # Source code for the OHSVU toolkit
+├── src/                    # Source code for the unsloth-vlm-pipeline toolkit
 │   ├── __init__.py
 │   ├── config.py           # Centralized configuration parameters
 │   ├── experiment_manager.py # Class to manage experiment artifacts and configurations
@@ -62,7 +62,7 @@ sudo apt-get install -y build-essential python3-dev libaio-dev ffmpeg libsm6 lib
 1.  **Clone the repository:**
     ```bash
     git clone <repository-url> # Replace <repository-url> with the actual URL
-    cd ohsvu
+    cd unsloth-vlm-pipeline
     ```
 
 2.  **Create and activate a virtual environment** (recommended):
@@ -117,9 +117,9 @@ A `Dockerfile` is provided to create a consistent environment with all necessary
 2.  **Build the image**:
     Navigate to the project root directory (where the `Dockerfile` is located) and run:
     ```bash
-    docker build -t ohsvu-dev .
+    docker build -t unsloth-vlm-pipeline-dev .
     ```
-    You can replace `ohsvu-dev` with your preferred image tag.
+    You can replace `unsloth-vlm-pipeline-dev` with your preferred image tag.
 
 ### Running the Docker Container
 
@@ -127,7 +127,7 @@ Once the image is built, you can run a container:
 
 *   **With GPU access (recommended for training/evaluation):**
     ```bash
-    docker run -it --rm --gpus all -v $(pwd)/experiments:/app/experiments -v $(pwd)/data/inputs:/app/data/inputs ohsvu-dev
+    docker run -it --rm --gpus all -v $(pwd)/experiments:/app/experiments -v $(pwd)/data/inputs:/app/data/inputs unsloth-vlm-pipeline-dev
     ```
     *   `-it`: Interactive mode with a pseudo-TTY.
     *   `--rm`: Automatically remove the container when it exits.
@@ -137,7 +137,7 @@ Once the image is built, you can run a container:
 
 *   **Without GPU access (for CPU-only tasks or debugging):**
     ```bash
-    docker run -it --rm -v $(pwd)/experiments:/app/experiments -v $(pwd)/data/inputs:/app/data/inputs ohsvu-dev
+    docker run -it --rm -v $(pwd)/experiments:/app/experiments -v $(pwd)/data/inputs:/app/data/inputs unsloth-vlm-pipeline-dev
     ```
 
 Upon running the container, you will be dropped into a `bash` shell inside `/app`, with the Python virtual environment activated and all dependencies ready.
