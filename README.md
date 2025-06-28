@@ -1,4 +1,4 @@
-# Project Unsloth-VLM-Pipeline
+# Unsloth-VLM-Pipeline
 
 This project focuses on fine-tuning and evaluating vision-language models with Unsloth.
 
