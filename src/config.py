@@ -9,9 +9,9 @@ PROJECT_ROOT = pathlib.Path(__file__).parent.parent.resolve() # Adjust if script
 # --- Data Paths ---
 DATA_DIR = PROJECT_ROOT / "data" / "inputs" # Base directory for input files
 VIDEO_DIR = DATA_DIR / "vlm_videos"
-OHS_PROMPT_FILENAME = "OHS_PROMPT_v2.txt"
+OHS_PROMPT_FILENAME = "PROMPT.txt"
 OHS_PROMPT_PATH = DATA_DIR / OHS_PROMPT_FILENAME
-CSV_FILENAME = "gemini_pro_v3_outputs.csv"
+CSV_FILENAME = "dataset.csv"
 CSV_PATH = DATA_DIR / CSV_FILENAME
 
 # --- Experiment Paths ---
