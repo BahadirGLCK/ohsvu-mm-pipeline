@@ -1,11 +1,11 @@
-# Unsloth-VLM-Pipeline
+# vlm-object-counting
 
 This project focuses on fine-tuning and evaluating vision-language models with Unsloth.
 
 ## Project Structure
 
 ```
-unsloth-vlm-pipeline/
+vlm-object-counting/
 ├── configs/                # Global configuration files (not specific to one experiment)
 ├── data/
 │   └── inputs/             # Raw input data (prompts, CSVs, videos)
@@ -24,7 +24,7 @@ unsloth-vlm-pipeline/
 ├── scripts/                # Standalone execution scripts for individual processes
 │   ├── run_finetuning.py
 │   └── run_evaluation.py
-├── src/                    # Source code for the unsloth-vlm-pipeline toolkit
+├── src/                    # Source code for the vlm-object-counting toolkit
 │   ├── __init__.py
 │   ├── config.py           # Centralized configuration parameters
 │   ├── experiment_manager.py # Class to manage experiment artifacts and configurations
@@ -62,7 +62,7 @@ sudo apt-get install -y build-essential python3-dev libaio-dev ffmpeg libsm6 lib
 1.  **Clone the repository:**
     ```bash
     git clone <repository-url> # Replace <repository-url> with the actual URL
-    cd unsloth-vlm-pipeline
+    cd vlm-object-counting
     ```
 
 2.  **Create and activate a virtual environment** (recommended):
@@ -117,9 +117,9 @@ A `Dockerfile` is provided to create a consistent environment with all necessary
 2.  **Build the image**:
     Navigate to the project root directory (where the `Dockerfile` is located) and run:
     ```bash
-    docker build -t unsloth-vlm-pipeline-dev .
+    docker build -t vlm-object-counting-dev .
     ```
-    You can replace `unsloth-vlm-pipeline-dev` with your preferred image tag.
+    You can replace `vlm-object-counting-dev` with your preferred image tag.
 
 ### Running the Docker Container
 
@@ -127,7 +127,7 @@ Once the image is built, you can run a container:
 
 *   **With GPU access (recommended for training/evaluation):**
     ```bash
-    docker run -it --rm --gpus all -v $(pwd)/experiments:/app/experiments -v $(pwd)/data/inputs:/app/data/inputs unsloth-vlm-pipeline-dev
+    docker run -it --rm --gpus all -v $(pwd)/experiments:/app/experiments -v $(pwd)/data/inputs:/app/data/inputs vlm-object-counting-dev
     ```
     *   `-it`: Interactive mode with a pseudo-TTY.
     *   `--rm`: Automatically remove the container when it exits.
@@ -137,7 +137,7 @@ Once the image is built, you can run a container:
 
 *   **Without GPU access (for CPU-only tasks or debugging):**
     ```bash
-    docker run -it --rm -v $(pwd)/experiments:/app/experiments -v $(pwd)/data/inputs:/app/data/inputs unsloth-vlm-pipeline-dev
+    docker run -it --rm -v $(pwd)/experiments:/app/experiments -v $(pwd)/data/inputs:/app/data/inputs vlm-object-counting-dev
     ```
 
 Upon running the container, you will be dropped into a `bash` shell inside `/app`, with the Python virtual environment activated and all dependencies ready.
